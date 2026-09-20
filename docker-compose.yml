@@ -10,3 +10,32 @@ services:
     environment:
       MILUJU_FILMY_DATA_DIR: /app/data
       MILUJU_FILMY_LISTEN_HOST: 0.0.0.0
+      MILUJU_FILMY_ONLINE_SEARCH: ${MILUJU_FILMY_ONLINE_SEARCH:-1}
+      MILUJU_FILMY_SEARCH_PROVIDER: ${MILUJU_FILMY_SEARCH_PROVIDER:-searxng}
+      MILUJU_FILMY_SEARXNG_URL: http://searxng:8080
+    depends_on:
+      searxng:
+        condition: service_started
+  searxng:
+    # Pin the tested official image; updates are deliberate.
+    image: docker.io/searxng/searxng@sha256:cd8812607ab73730a0b1a0dc4990223fe1b9e383f6f35947114d0bef7f8bb441
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/opt/milujufilmy/start.sh"]
+    environment:
+      SEARXNG_BIND_ADDRESS: 0.0.0.0
+      SEARXNG_PORT: 8080
+    volumes:
+      - ./infra/searxng/settings.yml:/opt/milujufilmy/settings.yml:ro
+      - ./infra/searxng/start.sh:/opt/milujufilmy/start.sh:ro
+      - searxng-config:/etc/searxng
+      - searxng-cache:/var/cache/searxng
+    # No published ports: only containers in this Compose project can reach it.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+volumes:
+  searxng-config:
+  searxng-cache:

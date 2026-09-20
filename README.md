@@ -19,7 +19,7 @@ just setup
 just backend-up
 ```
 
-První start vytvoří `data/pairing-token.txt`. Otevřete rozšíření v prohlížeči a v jeho **Možnostech** token vložte. Poté spusťte vývojové rozšíření:
+Docker Compose spustí i privátní SearXNG; jeho port není publikovaný na hostiteli. První start vytvoří `data/pairing-token.txt`. Otevřete rozšíření v prohlížeči a v jeho **Možnostech** token vložte. Poté spusťte vývojové rozšíření:
 
 ```sh
 just dev
@@ -72,16 +72,41 @@ Při propagaci vždy přiložte minimálně verzi, SHA-256, odkaz na tento návo
 ## Jak to funguje
 
 - Content script pracuje výhradně s URL a veřejně vykresleným DOM; nečte cookies ani interní API videoték.
-- Nejdřív zpracuje aktuální titul, následně další viditelné karty (celkem nejvýše 25 titulů). `MutationObserver`, `IntersectionObserver` a sledování URL zajišťují SPA navigaci a virtualizované seznamy. Opožděná odpověď pro starou stránku nesmí přepsat nový titul. Panel rozlišuje načítání, nenalezený titul a nedostupný zdroj.
+- Nejdřív zpracuje aktuální titul, následně další viditelné karty (celkem nejvýše 25 titulů). Hlavní titul může spustit online dohledání; související karty používají jen lokální IMDb a dříve uložené výsledky. Otevření karty jako hlavního titulu spustí plné dohledání ihned, i když její lokální lookup nic nenašel. `MutationObserver`, `IntersectionObserver` a sledování URL zajišťují SPA navigaci a virtualizované seznamy. Opožděná odpověď pro starou stránku nesmí přepsat nový titul. Panel rozlišuje načítání, nenalezený titul a nedostupný zdroj.
 - Lokální API naslouchá jen na `127.0.0.1:47321`. Lookup, synchronizace i ruční opravy vyžadují bearer token plus hlavičku `x-milujufilmy-client`.
-- Backend je persistentní cache plněná na požádání: **SQLite → chybějící titul vyhledat na ČSFD → načíst detail → uložit → vrátit rozšíření**. Český název se hledá přímo na `/hledat`; výsledky se rozlišují podle názvu, roku a typu (film/seriál/epizoda). Z detailu se čte skutečný rok, originální název, rating a počet hlasů. Originální název propojí český titul s lokálními IMDb daty.
-- Uložené výsledky přežijí restart backendu i aktualizaci IMDb datasetu. Záznamy jsou společné pro poskytovatele; stejný souběžný dotaz se načítá jednou. Detaily ČSFD jsou navíc uložené podle ID. Po 24 hodinách se při dalším požadavku obnoví rating ze známého detailu; při výpadku zůstane poslední funkční hodnocení s původním časem aktualizace. Nenalezený výsledek se opakuje po minutě, nikoli až po měsíci.
-- Pro ČSFD se přednostně čte plné veřejné HTML standardním HTTP požadavkem. Pokud stránka potřebuje vykreslení, backend použije Playwright Chromium v izolovaném profilu. Docker obraz obsahuje prohlížeč i jeho závislosti. Během živé diagnostiky ČSFD vracelo HTTP klientovi data, ale headless prohlížeči BotStopper „Přístup zamítnut“; proto samotná emulace prohlížeče není spolehlivější cesta. Cookies ani profil uživatelova Chrome se do backendu nepřenášejí.
-- IMDb se importuje z oficiálních non-commercial datasetů; web IMDb se nescrapuje. Tento snapshot zůstává samostatným zdrojem a není podmínkou pro získání ČSFD. Wikidata a běžná stránka DuckDuckGo v Chromium jsou záložní cesty. `MILUJU_FILMY_ONLINE_SEARCH=0` vypne automatické online dohledávání.
-- DuckDuckGo HTTP 202 s `challenge-form` / `anomaly-modal` je ochrana proti robotům, nikoli platný prázdný výsledek. Adaptér rozpozná také HTTP 403/429 a ČSFD „Přístup zamítnut“, použije exponenciální odstup a nepokouší se automaticky řešit CAPTCHA. Stav blokace je v `GET /v1/health` a chybějící zdroje se v panelu označí jako nedostupné. Dotazy na zdroje probíhají sériově s odstupem alespoň sekundy.
+- Backend nejprve použije SQLite: uložené automatické identity, detaily a lokální IMDb včetně alternativních názvů. Chybějící zdroj dohledá přes Wikidata, přímé hledání ČSFD a nakonec SearXNG. Známé IMDb nezabrání dohledání chybějícího ČSFD. IMDb odkaz se přes web hledá jen tehdy, máme-li místní dataset, ze kterého lze načíst data.
+- Automatická identita zdroje se ukládá samostatně od ratingu jen při jistotě alespoň 0,80. Detaily ČSFD se obnovují po 24 hodinách; při výpadku se vrací poslední hodnocení s původním časem. Úplný výsledek má cache až 24 hodin, neúplný jednu minutu. SearXNG odpovědi se ukládají 24 hodin, prázdné nebo částečné jednu minutu. Souběžné stejné lookupy i webové dotazy se slučují.
+- IMDb se importuje z oficiálních non-commercial datasetů `title.basics`, `title.episode`, `title.ratings` a `title.akas`. U aliasů ukládáme regiony CZ/SK/US/GB nebo jazyky cs/sk/en; gzip se stáhne celý. Známý originální název, rok, typ a číslo epizody mají přednost před nejednoznačným překladem. Web IMDb se nescrapuje. Wikidata mohou dodat IMDb ID i bez odkazu na ČSFD.
+- Pro ČSFD se přednostně čte veřejné HTML standardním HTTP požadavkem. Chromium v izolovaném profilu slouží pouze pro stránky vyžadující vykreslení. CAPTCHA nebo zákaz přístupu není důvodem k automatickému obcházení; uživatelův profil a cookies se nepřenášejí.
+- Webové vyhledávání používá rozhraní `SearchProvider` s adaptérem SearXNG. Přímý DDG scraper je odstraněn. Soukromý SearXNG v Dockeru používá pouze enginy Brave a Bing, JSON API a vypnuté autocomplete. Jde o webové enginy SearXNG, nikoli placené Brave API. I tyto enginy mohou být nedostupné nebo blokované; neúplná odpověď se rozlišuje od platného prázdného výsledku.
+- Požadavky na jednotlivé zdroje jsou sériové s rozestupem alespoň sekundy. Exponenciální čekání po chybách (30 sekund až hodina), delší čekání po blokaci a serverové `Retry-After` se ukládají do SQLite a přežijí restart i IMDb import. ČSFD/SearXNG 202/403/429 vyvolá přestávku alespoň pět minut. Stav je v `GET /v1/health`; nevyřešené zdroje dostanou v panelu upozornění.
 - Ruční oprava se ukládá po zdrojích podle poskytovatele a content ID (nebo normalizované identity), bez expirace. V „Změnit shodu“ lze vybrat kandidáta nebo vložit HTTPS odkaz na ČSFD. Backend URL ověří, sám načte detail a uloží shodu přes `POST /v1/matches/csfd`; samotná hodnota ratingu se natvrdo nenastavuje.
 
-Pro ruční aktualizaci IMDb zavolejte autorizovaný endpoint `POST /v1/imdb/sync`; jde o velký download a spouští se nanejvýš jednou denně provozním postupem. Import se připraví do nové SQLite databáze a teprve po dokončení se atomicky přepne, takže neúspěch zachová předchozí snapshot.
+Pro ruční aktualizaci IMDb zavolejte autorizovaný endpoint `POST /v1/imdb/sync`; jde o velký download a spouští se nanejvýš jednou denně provozním postupem. Import se připraví v dočasné SQLite databázi. Po dokončení se v jedné transakci nahradí pouze tabulky IMDb; cache, identity, ruční opravy a stav zdrojů zůstanou zachované. Neúspěch ponechá předchozí dataset použitelný. Aliasový dataset se načte při příští ručně spuštěné synchronizaci, nikoli automaticky při startu; zůstává limit jedné aktualizace za 24 hodin.
+
+## Nastavení vyhledávání
+
+Výchozí Docker konfigurace nevyžaduje účet ani API klíč. `just backend-up` spustí obě služby. SearXNG naslouchá jen v síti Compose, hlavní API zůstává na `127.0.0.1:47321`. Klíč instance SearXNG se automaticky vytvoří v privátním Docker svazku, nevypisuje se ani se neukládá do repozitáře. `just backend-down` data nemaže.
+
+```sh
+# Stav služeb a zdrojů; health neobsahuje párovací token.
+docker compose ps
+curl --fail http://127.0.0.1:47321/v1/health
+
+# Vypnout pouze webový fallback; ČSFD a Wikidata zůstávají dostupné.
+MILUJU_FILMY_SEARCH_PROVIDER=none just backend-up
+
+# Vypnout všechno automatické online dohledávání.
+MILUJU_FILMY_ONLINE_SEARCH=0 just backend-up
+```
+
+Proměnné lze uložit i do lokálního `.env`. Pro obnovení výchozího chování použijte `MILUJU_FILMY_SEARCH_PROVIDER=searxng` a `MILUJU_FILMY_ONLINE_SEARCH=1`. Explicitní ruční vložení ČSFD URL zůstává samostatně povolenou operací.
+
+Při spuštění API přímo přes Node nastavte `MILUJU_FILMY_SEARXNG_URL` na vlastní dostupnou instanci (výchozí `http://127.0.0.1:47322`), nebo `MILUJU_FILMY_SEARCH_PROVIDER=none`. Docker verze používá interní `http://searxng:8080`.
+
+Seznam enginů je v [`infra/searxng/settings.yml`](infra/searxng/settings.yml). Změnu použijete příkazem `docker compose restart searxng`. Pinned image v Compose aktualizujte záměrně a ověřte JSON endpoint; [oficiální dokumentace kontejneru](https://docs.searxng.org/admin/installation-docker.html) a [Search API](https://docs.searxng.org/dev/search_api.html).
+
+Tato změna připravuje nový backend; samotný build neaktualizuje již spuštěný kontejner. Při provozu z více worktree nespouštějte dvě API na stejném portu a nepřipojujte současně dva backendy ke stejné databázi. Použijte vybraný checkout se svým existujícím `data/`; nový worktree vlastní původní databázi ani párování automaticky nepřebírá.
 
 ## Omezení v1
 

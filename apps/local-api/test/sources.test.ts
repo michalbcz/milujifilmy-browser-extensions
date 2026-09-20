@@ -22,7 +22,7 @@ describe("Czech source identity", () => {
         ? [{ title: "MR 73", year: 2008, kind: "movie", url: "https://www.csfd.cz/film/228849/prehled/" }]
         : [{ title: "Strážce zákona", year: 1971, kind: "movie", url: "https://www.csfd.cz/film/12363/prehled/" }],
       read: async (url) => `<script type="application/ld+json">${JSON.stringify({ "@type": "Movie", name: "Strážce zákona", dateCreated: url.includes("228849") ? "2008" : "1971" })}</script><ul class="film-names"><li>${url.includes("228849") ? "MR 73" : "Lawman"}</li></ul>`,
-      searchDuckDuckGo: async () => [], status: () => ({}), close: async () => {},
+      status: () => ({}), close: async () => {},
     } });
     try {
       const found = await lookup.lookup({ requestId: "namesake", provider: "ivysilani", title: "Strážce zákona", originalTitle: "Mr 73", year: 2008, kind: "movie", locale: "cs-CZ" });
@@ -37,7 +37,7 @@ describe("Czech source identity", () => {
     const pages = {
       searchCsfd: async () => { searches++; return [{ url: "https://www.csfd.cz/film/1224558-helsinsky-syndrom/prehled/", title: "Helsinský syndrom", kind: "series" as const, year: 2022 }]; },
       read: async () => { reads++; return fixture("helsinki"); },
-      searchDuckDuckGo: async () => [], status: () => ({}), close: async () => {},
+      status: () => ({}), close: async () => {},
     };
     const title: DetectedTitle = { requestId: "1", provider: "ivysilani", title: "Helsinský syndrom", kind: "series", locale: "cs-CZ" };
     const first = new LocalLookup(path, { onlineSearch: true, pages });
@@ -51,7 +51,7 @@ describe("Czech source identity", () => {
   it("preserves the last successful result when stale refresh fails without making it a manual override", async () => {
     const path = join(tmpdir(), `milujufilmy-stale-${crypto.randomUUID()}.sqlite`);
     let offline = false;
-    const pages = { searchCsfd: async () => [{ url: "https://www.csfd.cz/film/1224558/prehled/", title: "Helsinský syndrom", kind: "series" as const }], read: async () => { if (offline) throw new Error("Offline"); return fixture("helsinki"); }, searchDuckDuckGo: async () => [], status: () => ({}), close: async () => {} };
+    const pages = { searchCsfd: async () => [{ url: "https://www.csfd.cz/film/1224558/prehled/", title: "Helsinský syndrom", kind: "series" as const }], read: async () => { if (offline) throw new Error("Offline"); return fixture("helsinki"); }, status: () => ({}), close: async () => {} };
     const title: DetectedTitle = { requestId: "1", provider: "ivysilani", title: "Helsinský syndrom", kind: "series", locale: "cs-CZ" };
     const lookup = new LocalLookup(path, { onlineSearch: true, pages });
     const first = await lookup.lookup(title);

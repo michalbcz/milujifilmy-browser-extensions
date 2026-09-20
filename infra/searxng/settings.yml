@@ -1,0 +1,28 @@
+# Private instance: expose only to local-api through the Compose network.
+use_default_settings:
+  engines:
+    keep_only:
+      - brave
+      - bing
+general:
+  instance_name: MilujuFilmy
+  enable_metrics: false
+search:
+  autocomplete: ""
+  default_lang: cs-CZ
+  formats:
+    - json
+    - html
+  suspended_times:
+    SearxEngineAccessDenied: 600
+    SearxEngineCaptcha: 3600
+    SearxEngineTooManyRequests: 600
+server:
+  secret_key: "MILUJU_FILMY_GENERATED_SECRET"
+  limiter: false
+  public_instance: false
+  image_proxy: false
+outgoing:
+  request_timeout: 6.0
+  max_request_timeout: 8.0
+  pool_connections: 2
