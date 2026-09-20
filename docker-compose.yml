@@ -1,0 +1,12 @@
+services:
+  local-api:
+    build:
+      context: .
+      dockerfile: apps/local-api/Dockerfile
+    ports:
+      - "127.0.0.1:47321:47321"
+    volumes:
+      - ./data:/app/data
+    environment:
+      MILUJU_FILMY_DATA_DIR: /app/data
+      MILUJU_FILMY_LISTEN_HOST: 0.0.0.0

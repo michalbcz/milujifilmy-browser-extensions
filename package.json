@@ -1,0 +1,17 @@
+{
+  "name": "milujufilmy",
+  "private": true,
+  "packageManager": "pnpm@12.4.2",
+  "scripts": {
+    "build": "pnpm --filter @milujufilmy/contracts build && pnpm --filter @milujufilmy/local-api build && pnpm --filter @milujufilmy/extension build",
+    "dev": "pnpm --filter @milujufilmy/extension dev",
+    "test": "pnpm --filter @milujufilmy/contracts build && pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "package": "pnpm --filter @milujufilmy/extension zip"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

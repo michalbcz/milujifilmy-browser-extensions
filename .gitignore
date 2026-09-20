@@ -1,0 +1,40 @@
+# Dependencies and package-manager caches
+node_modules/
+.pnpm-store/
+
+# Generated builds and WXT/TypeScript state
+dist/
+.output/
+.wxt/
+*.tsbuildinfo
+.cache/
+
+# Test output
+coverage/
+playwright-report/
+test-results/
+.nyc_output/
+
+# Local backend data, pairing secrets and SQLite sidecars
+data/
+pairing-token.txt
+*.sqlite
+*.sqlite-*
+*.sqlite.*
+*.db
+*.db-*
+
+# Local environment; sanitized examples may be committed
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Logs and local OS/editor files
+*.log
+.DS_Store
+._*
+Thumbs.db
+.idea/
+*.swp
+*.swo

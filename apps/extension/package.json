@@ -1,0 +1,28 @@
+{
+  "name": "@milujufilmy/extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "wxt build",
+    "dev": "wxt",
+    "zip": "wxt zip",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@milujufilmy/contracts": "workspace:*",
+    "@vitejs/plugin-react": "^5.0.0",
+    "@wxt-dev/module-react": "^1.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "wxt": "^0.19.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "happy-dom": "^20.14.5"
+  }
+}

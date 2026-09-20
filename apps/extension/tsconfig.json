@@ -1,0 +1,9 @@
+{
+  "extends": "./.wxt/tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "types": ["vitest/globals"]
+  },
+  "include": ["src", "entrypoints", "wxt.config.ts", ".wxt/wxt.d.ts"]
+}
