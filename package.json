@@ -7,7 +7,8 @@
     "dev": "pnpm --filter @milujufilmy/extension dev",
     "test": "pnpm --filter @milujufilmy/contracts build && pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "package": "pnpm --filter @milujufilmy/extension zip"
+    "package": "pnpm --filter @milujufilmy/extension zip",
+    "doctor": "node scripts/doctor.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
