@@ -16,6 +16,22 @@ export async function saveSettings(settings: ExtensionSettings): Promise<void> {
   await browser.storage.local.set({ [SETTINGS_KEY]: settings });
 }
 
+async function extractErrorMessage(response: Response, fallback: string): Promise<string> {
+  if (response.status === 401) return "Párovací token není platný.";
+  try {
+    const data = (await response.json()) as { error?: unknown };
+    if (typeof data?.error === "string") return data.error;
+    if (data?.error && typeof data.error === "object") {
+      const fieldErrors = (data.error as { fieldErrors?: Record<string, string[]> }).fieldErrors;
+      const issues = fieldErrors ? Object.values(fieldErrors).flat() : [];
+      if (issues.length) return `Chyba dat: ${issues.join("; ")}`;
+    }
+  } catch {
+    // If not JSON, use fallback
+  }
+  return fallback;
+}
+
 export async function lookupBatch(items: DetectedTitle[]): Promise<LookupResult[]> {
   const { token } = await getSettings();
   if (!token) throw new Error("Nejdřív vložte párovací token v nastavení rozšíření.");
@@ -25,7 +41,7 @@ export async function lookupBatch(items: DetectedTitle[]): Promise<LookupResult[
     body: JSON.stringify({ items: items.slice(0, 25) }),
     signal: AbortSignal.timeout(90_000),
   });
-  if (!response.ok) throw new Error(response.status === 401 ? "Párovací token není platný." : "Lokální backend není dostupný.");
+  if (!response.ok) throw new Error(await extractErrorMessage(response, "Lokální backend není dostupný."));
   return (await response.json() as { results: LookupResult[] }).results;
 }
 
@@ -46,5 +62,5 @@ export async function saveOverride(detected: DetectedTitle, selected: RatingCand
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json", "x-milujufilmy-client": "extension" },
     body: JSON.stringify({ detected, selected }),
   });
-  if (!response.ok) throw new Error("Ruční opravu se nepodařilo uložit.");
+  if (!response.ok) throw new Error(await extractErrorMessage(response, "Ruční opravu se nepodařilo uložit."));
 }

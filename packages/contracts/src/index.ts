@@ -8,6 +8,7 @@ export const detectedTitleSchema = z
     requestId: z.string().min(1),
     provider: z.string().min(1),
     providerContentId: z.string().min(1).optional(),
+    parentContentId: z.string().min(1).optional(),
     title: z.string().min(1),
     originalTitle: z.string().min(1).optional(),
     year: z.number().int().min(1888).max(2100).optional(),

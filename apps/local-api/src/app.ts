@@ -37,7 +37,10 @@ export function createApp(options: AppOptions) {
 
   app.post("/v1/lookup/batch", async (request, reply) => {
     const parsed = lookupBatchRequestSchema.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    if (!parsed.success) {
+      request.log.warn({ issues: parsed.error.issues }, "Validation failed for lookup batch");
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
     const results = await Promise.all(
       parsed.data.items.map(async (title) => {
         const candidates = await options.lookup(title);
