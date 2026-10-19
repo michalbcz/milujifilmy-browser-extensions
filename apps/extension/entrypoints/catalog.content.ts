@@ -60,7 +60,8 @@ export default defineContentScript({
       if (document.fullscreenElement) return;
       for (const card of document.querySelectorAll(resolvedAdapter.cardSelectors.join(","))) {
         const label = (card.querySelector("img[alt]")?.getAttribute("alt") ?? card.getAttribute("aria-label") ?? "").replace(/\s+/g, " ");
-        const title = titles.find((item) => item.title === label);
+        // An episode shares its series' title but has no card of its own; badge the series.
+        const title = titles.find((item) => item.title === label && item.kind !== "episode");
         const result = title && state.results.find((item) => item.requestId === title.requestId);
         if (title && result) addBadge(card, title, result.candidates, () => panel.show());
       }

@@ -78,9 +78,24 @@ export function parseCsfdRating(html: string): number | undefined {
   return match ? Number(match[1]) : undefined;
 }
 
+/** ČSFD nests episodes under their series (/film/<series>/<episode>/), so the last numeric segment is the title's id. */
+export function csfdFilmId(url: string): string | undefined {
+  const path = url.match(/^https:\/\/www\.csfd\.cz(\/film\/[^?#]*)/)?.[1];
+  return path ? [...path.matchAll(/\/(\d+)(?=[-/]|$)/g)].at(-1)?.[1] : undefined;
+}
+
+export function parseCsfdEpisodes(html: string): Array<{ season: number; episode: number; url: string }> {
+  const $ = cheerio.load(html);
+  return $("h3.film-title-inline").toArray().flatMap((heading) => {
+    const code = $(heading).find(".film-title-info").text().match(/\((?:S(\d+))?E(\d+)\)/i);
+    const href = $(heading).find("a[href^='/film/']").attr("href");
+    return code && href ? [{ season: Number(code[1] ?? 1), episode: Number(code[2]), url: new URL(href, "https://www.csfd.cz").href }] : [];
+  });
+}
+
 export function parseCsfdDetail(html: string, url: string): RatingCandidate | undefined {
   const $ = cheerio.load(html);
-  const id = url.match(/^https:\/\/www\.csfd\.cz\/film\/(\d+)(?:[/-]|$)/)?.[1];
+  const id = csfdFilmId(url);
   for (const node of $("script[type='application/ld+json']").toArray()) {
     try {
       const data = JSON.parse($(node).text());
@@ -93,10 +108,14 @@ export function parseCsfdDetail(html: string, url: string): RatingCandidate | un
       const year = Number(String(data.dateCreated ?? "").slice(0, 4));
       const rating = parseCsfdRating(html);
       const votes = Number(data.aggregateRating?.ratingCount);
+      // Episode pages carry TVSeries JSON-LD; the heading code "(S01E02)" and "(epizoda)" label identify them.
+      const code = $(".film-header-name h1, h1").first().text().match(/\(S(\d+)E(\d+)\)/i);
+      const isEpisode = data["@type"] === "TVEpisode" || Boolean(code) || /\(epizoda\)/i.test($(".film-header-name .type, h1 + .type").first().text());
       return {
         source: "csfd", sourceId: id, sourceUrl: url, canonicalTitle: data.name,
         originalTitle: names[0], year: year >= 1888 && year <= 2100 ? year : undefined,
-        kind: data["@type"] === "TVSeries" ? "series" : data["@type"] === "TVEpisode" ? "episode" : "movie",
+        kind: isEpisode ? "episode" : data["@type"] === "TVSeries" ? "series" : "movie",
+        ...(code ? { season: Number(code[1]), episode: Number(code[2]) } : {}),
         rating: rating === undefined ? undefined : { value: rating, scale: 100, votes: Number.isInteger(votes) && votes >= 0 ? votes : undefined, fetchedAt: new Date().toISOString() },
         evidence: ["ČSFD detail page"],
       };
@@ -125,6 +144,8 @@ function sqlKind(kind: MediaKind): string {
 function cacheKey(title: DetectedTitle): string {
   return createHash("sha256").update(JSON.stringify({
     matcherVersion: 6,
+    // Episodes were once matched by title alone; series-based matching must not replay those results.
+    ...(title.kind === "episode" ? { episodeMatcher: 1 } : {}),
     title: normalizeTitle(title.title),
     originalTitle: normalizeTitle(title.originalTitle ?? ""),
     year: title.year,
@@ -189,6 +210,9 @@ export function openDatabase(path: string, journalMode: "WAL" | "DELETE" = "WAL"
     CREATE TABLE IF NOT EXISTS manual_overrides (key TEXT PRIMARY KEY, payload TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   `);
+  const columns = database.prepare("PRAGMA table_info(imdb_titles)").all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "parent_id")) database.exec("ALTER TABLE imdb_titles ADD COLUMN parent_id TEXT");
+  database.exec("CREATE INDEX IF NOT EXISTS idx_imdb_titles_parent ON imdb_titles(parent_id, season, episode)");
   return database;
 }
 
@@ -220,7 +244,7 @@ export class LocalLookup {
     const identity = manual ? `${cacheKey(title)}:${overrideKey(title)}` : cacheKey(title);
     const existing = this.inFlight.get(identity);
     if (existing) return existing;
-    const pending = this.lookupUncached(title).finally(() => this.inFlight.delete(identity));
+    const pending = (title.kind === "episode" ? this.lookupEpisode(title) : this.lookupUncached(title)).finally(() => this.inFlight.delete(identity));
     this.inFlight.set(identity, pending);
     return pending;
   }
@@ -295,6 +319,71 @@ export class LocalLookup {
     return unique;
   }
 
+  /** An episode is found through its series: ČSFD's episode list and IMDb's parent/season/episode rows. */
+  private async lookupEpisode(title: DetectedTitle): Promise<RatingCandidate[]> {
+    const key = cacheKey(title);
+    const overrides = ["imdb", "csfd"].flatMap((source) => {
+      const row = this.db.prepare("SELECT payload FROM manual_overrides WHERE key = ?").get(`${overrideKey(title)}:${source}`) as { payload: string } | undefined;
+      return row ? [JSON.parse(row.payload) as RatingCandidate] : [];
+    });
+    const cached = this.db.prepare("SELECT payload, expires_at FROM cache WHERE key = ?").get(key) as { payload: string; expires_at: number } | undefined;
+    if (cached && cached.expires_at > Date.now() && !overrides.length) return JSON.parse(cached.payload) as RatingCandidate[];
+    const previous = cached ? JSON.parse(cached.payload) as RatingCandidate[] : [];
+    if (!title.season || !title.episode) return overrides;
+    const { season, episode } = title;
+
+    const series = await this.lookup({
+      ...title, requestId: `${title.requestId}:series`, providerContentId: title.parentContentId, parentContentId: undefined,
+      kind: "series", year: undefined, season: undefined, episode: undefined, episodeTitle: undefined,
+    });
+    const best = (source: "imdb" | "csfd") => series
+      .filter((candidate) => candidate.source === source && candidate.kind === "series" && (candidate.evidence.includes("manual") || this.confidence(candidate) >= 0.5))
+      .sort((a, b) => Number(b.evidence.includes("manual")) - Number(a.evidence.includes("manual")) || this.confidence(b) - this.confidence(a))[0];
+    const episodeEvidence = (candidate: RatingCandidate, parent: RatingCandidate): RatingCandidate => ({
+      ...candidate, kind: "episode", season, episode, aliases: [parent.canonicalTitle, ...(parent.originalTitle ? [parent.originalTitle] : [])],
+      evidence: ["confidence:1", `episode of ${parent.source}:${parent.sourceId}`, ...candidate.evidence.filter((item) => !item.startsWith("confidence:"))],
+    });
+
+    const candidates: RatingCandidate[] = [];
+    const imdbSeries = best("imdb");
+    if (imdbSeries && !overrides.some((candidate) => candidate.source === "imdb")) {
+      const row = this.db.prepare(`
+        SELECT t.id, t.title, t.original_title AS originalTitle, t.year, t.kind, t.season, t.episode,
+               r.value AS rating, r.votes AS votes, r.fetched_at AS fetchedAt
+        FROM imdb_titles t LEFT JOIN imdb_ratings r ON r.id = t.id
+        WHERE t.parent_id = ? AND t.season = ? AND t.episode = ? LIMIT 1
+      `).get(imdbSeries.sourceId, season, episode) as ImdbRow | undefined;
+      if (row) candidates.push(episodeEvidence(this.imdbCandidate(row, title), imdbSeries));
+    }
+    const csfdSeries = best("csfd");
+    if (csfdSeries && this.onlineSearch && !overrides.some((candidate) => candidate.source === "csfd")) {
+      try {
+        const listed = (await this.csfdEpisodes(csfdSeries.sourceUrl)).find((item) => item.season === season && item.episode === episode);
+        const found = listed ? await this.csfdCandidate(listed.url, title) : undefined;
+        // The URL comes from the series' own episode list, so its season/episode code is authoritative.
+        if (found) candidates.push(episodeEvidence(found, csfdSeries));
+      } catch { /* Keep IMDb and cached data available if ČSFD is offline. */ }
+    }
+
+    const unique = [...overrides, ...candidates];
+    if (!unique.length && previous.length) unique.push(...previous);
+    const hasFreshCsfd = unique.some((candidate) => candidate.source === "csfd" && candidate.rating && Date.now() - Date.parse(candidate.rating.fetchedAt) < 86_400_000);
+    if (!overrides.length) this.db.prepare("INSERT INTO cache(key, payload, expires_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload, expires_at=excluded.expires_at")
+      .run(key, JSON.stringify(unique), Date.now() + (hasFreshCsfd ? 86_400_000 : 60_000));
+    return unique;
+  }
+
+  private async csfdEpisodes(seriesUrl: string): Promise<Array<{ season: number; episode: number; url: string }>> {
+    const base = seriesUrl.match(/^https:\/\/www\.csfd\.cz\/film\/\d+[^/]*\//)?.[0];
+    if (!base) return [];
+    const sourceKey = `csfd-episodes:${csfdFilmId(base)}`;
+    const stored = this.db.prepare("SELECT payload FROM cache WHERE key = ? AND expires_at > ?").get(sourceKey, Date.now()) as { payload: string } | undefined;
+    if (stored) return JSON.parse(stored.payload) as Array<{ season: number; episode: number; url: string }>;
+    const episodes = parseCsfdEpisodes(await this.pages.read(`${base}epizody/`));
+    if (episodes.length) this.db.prepare("INSERT OR REPLACE INTO cache(key,payload,expires_at) VALUES (?,?,?)").run(sourceKey, JSON.stringify(episodes), Date.now() + 86_400_000);
+    return episodes;
+  }
+
   async saveOverride(title: DetectedTitle, selected: RatingCandidate): Promise<void> {
     const key = `${overrideKey(title)}:${selected.source}`;
     this.db.prepare("INSERT INTO manual_overrides(key, payload) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload")
@@ -304,7 +393,7 @@ export class LocalLookup {
 
   async saveCsfdUrl(title: DetectedTitle, url: string): Promise<RatingCandidate> {
     const parsed = new URL(url);
-    const id = parsed.pathname.match(/^\/film\/(\d+)(?:[/-]|$)/)?.[1];
+    const id = csfdFilmId(parsed.href);
     if (parsed.protocol !== "https:" || parsed.hostname !== "www.csfd.cz" || parsed.port || parsed.username || parsed.password || !id) throw new Error("Vložte HTTPS odkaz na detail filmu na www.csfd.cz.");
     const candidate = await this.csfdCandidate(`https://www.csfd.cz/film/${id}/prehled/`, title);
     if (!candidate) throw new Error("ČSFD detail se nepodařilo načíst. Zkuste to později.");
@@ -498,7 +587,7 @@ export class LocalLookup {
 
   private async csfdCandidate(url: string, title: DetectedTitle): Promise<RatingCandidate | undefined> {
     if (!/^https:\/\/www\.csfd\.cz\/film\//.test(url)) return undefined;
-    const sourceKey = `csfd-detail:${url.match(/\/film\/(\d+)/)?.[1]}`;
+    const sourceKey = `csfd-detail:${csfdFilmId(url)}`;
     const stored = this.db.prepare("SELECT payload FROM cache WHERE key = ? AND expires_at > ?").get(sourceKey, Date.now()) as { payload: string } | undefined;
     let candidate: RatingCandidate | undefined = stored ? JSON.parse(stored.payload) as RatingCandidate : undefined;
     if (!candidate) {
@@ -530,11 +619,11 @@ export class LocalLookup {
   }
 
   private async importEpisodes(db: Database.Database): Promise<void> {
-    const update = db.prepare("UPDATE imdb_titles SET season = ?, episode = ? WHERE id = ?");
+    const update = db.prepare("UPDATE imdb_titles SET parent_id = ?, season = ?, episode = ? WHERE id = ?");
     await this.forEachDatasetLine(IMDB_DATASETS.episodes, (columns) => {
       const season = Number(columns[2]);
       const episode = Number(columns[3]);
-      update.run(Number.isInteger(season) ? season : null, Number.isInteger(episode) ? episode : null, columns[0]);
+      update.run(columns[1] || null, Number.isInteger(season) ? season : null, Number.isInteger(episode) ? episode : null, columns[0]);
     });
   }
 

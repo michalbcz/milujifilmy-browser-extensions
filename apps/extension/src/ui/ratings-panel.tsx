@@ -5,19 +5,19 @@ import { bestCandidate } from "../matching.js";
 import type { TabState } from "../tab-state.js";
 
 export function RatingsPanel({ state, onHide, onRefresh }: { state: TabState; onHide?: () => void; onRefresh: () => void }) {
-  const primary = state.titles.find((title) => title.pageRole === "primary");
-  const related = state.titles.filter((title) => title !== primary);
+  const primaries = state.titles.filter((title) => title.pageRole === "primary");
+  const related = state.titles.filter((title) => title.pageRole !== "primary");
   return <main>
     <header><div><h1>MilujuFilmy</h1><p>IMDb a ČSFD na jedné kartě</p></div>{onHide && <button className="hide" aria-label="Skrýt panel MilujuFilmy" onClick={onHide}>×</button>}</header>
     {state.error && <p role="alert" className="error">{state.error} <button onClick={onRefresh}>Zkusit znovu</button></p>}
     {!state.titles.length && <p role="status">{state.loading ? "Rozpoznávám titul…" : "Na této stránce zatím nebyl rozpoznán žádný titul."}</p>}
-    {primary && <TitleCard key={primary.requestId} title={primary} state={state} primary onRefresh={onRefresh} />}
+    {primaries.map((title) => <TitleCard key={title.requestId} title={title} state={state} primary eyebrow={title.kind === "episode" ? "Právě otevřená epizoda" : primaries.length > 1 ? "Celý seriál" : "Právě otevřený titul"} onRefresh={onRefresh} />)}
     {related.length > 0 && <div className="related"><h2 className="related-heading">Další nalezené filmy na stránce <span>({related.length})</span></h2>{related.map((title) => <TitleCard key={title.requestId} title={title} state={state} onRefresh={onRefresh} />)}</div>}
     <footer>IMDb data: osobní nekomerční použití. Hodnocení jsou odkazy na původní zdroje.</footer>
   </main>;
 }
 
-function TitleCard({ title, state, primary, onRefresh }: { title: DetectedTitle; state: TabState; primary?: boolean; onRefresh: () => void }) {
+function TitleCard({ title, state, primary, eyebrow, onRefresh }: { title: DetectedTitle; state: TabState; primary?: boolean; eyebrow?: string; onRefresh: () => void }) {
   const [notice, setNotice] = useState("");
   const [url, setUrl] = useState("");
   const [saving, setSaving] = useState(false);
@@ -33,11 +33,15 @@ function TitleCard({ title, state, primary, onRefresh }: { title: DetectedTitle;
     } catch (error) { setNotice(error instanceof Error ? error.message : "Uložení se nezdařilo."); }
     finally { setSaving(false); }
   };
-  return <section className={primary ? "title-card primary" : "title-card"} aria-label={primary ? "Hlavní titul" : title.title}>
-    {primary && <div className="eyebrow">Právě otevřený titul</div>}
-    <h2>{title.title}</h2><small>{[bestYear, title.kind === "series" ? "Seriál" : title.kind === "episode" ? `Epizoda S${title.season}E${title.episode}` : "Film"].filter(Boolean).join(" · ")}</small>
+  const episode = title.kind === "episode" && title.season && title.episode ? { season: title.season, episode: title.episode } : undefined;
+  const episodeCode = episode ? `S${String(episode.season).padStart(2, "0")}E${String(episode.episode).padStart(2, "0")}` : "";
+  return <section className={primary ? "title-card primary" : "title-card"} aria-label={primary ? (episode ? "Otevřená epizoda" : "Hlavní titul") : title.title}>
+    {eyebrow && <div className="eyebrow">{eyebrow}</div>}
+    {episode
+      ? <><h2>{title.episodeTitle ?? `${episode.episode}. epizoda`}</h2><small>{[title.title, `Epizoda ${episodeCode}`, bestYear].filter(Boolean).join(" · ")}</small></>
+      : <><h2>{title.title}</h2><small>{[bestYear, title.kind === "series" ? "Seriál" : "Film"].filter(Boolean).join(" · ")}</small></>}
     {(["imdb", "csfd"] as const).map((source) => {
-      const match = bestCandidate(title.originalTitle ?? title.title, title.year, candidates.filter((candidate) => candidate.source === source));
+      const match = bestCandidate(title.originalTitle ?? title.title, title.year, candidates.filter((candidate) => candidate.source === source), episode);
       const label = source === "imdb" ? "IMDb" : "ČSFD";
       if (!match) return <p className="missing" key={source}>{label}: {state.loading && !result ? "načítám…" : state.error || result?.warnings?.length ? "nedostupné" : "nenalezeno"}</p>;
       const rating = match.candidate.rating;

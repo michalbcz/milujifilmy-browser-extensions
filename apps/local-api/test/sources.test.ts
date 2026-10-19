@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { DetectedTitle, RatingCandidate } from "@milujufilmy/contracts";
-import { buildPublicSearchQuery, LocalLookup, openDatabase, parseCsfdRating, parseCsfdDetail, parseWikidataCsfdId, parseWikidataItemId, resolveSearchResultUrl, runInTransaction, scoreCandidate } from "../src/sources.js";
+import { buildPublicSearchQuery, LocalLookup, openDatabase, parseCsfdEpisodes, parseCsfdRating, parseCsfdDetail, parseWikidataCsfdId, parseWikidataItemId, resolveSearchResultUrl, runInTransaction, scoreCandidate } from "../src/sources.js";
 
 afterEach(() => vi.unstubAllGlobals());
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/${name}.html`, import.meta.url), "utf8");
@@ -194,5 +194,72 @@ describe("source helpers", () => {
     await first.saveOverride(detected, selected);
     const restarted = new LocalLookup(path);
     expect((await restarted.lookup(detected))[0]?.sourceId).toBe("tt1160419");
+  });
+});
+
+describe("episode lookup", () => {
+  const seriesUrl = "https://www.csfd.cz/film/339773-pripady-1-oddeleni/prehled/";
+  const episodeUrl = "https://www.csfd.cz/film/339773-pripady-1-oddeleni/417726-fantom-z-jizaku/prehled/";
+  const episodesHtml = `<div class="film-episodes-list"><ul>
+    <li><h3 class="film-title-inline"><a href="/film/339773-pripady-1-oddeleni/417724-serie-1/prehled/" class="film-title-name">Série 1</a><span class="film-title-info"><span class="info">2014</span>14 epizod</span></h3></li></ul></div>
+    <table class="updated-box-table"><tbody>
+    <tr><td class="name name-half"><h3 class="film-title-inline"><a href="/film/339773-pripady-1-oddeleni/417725-rozctvrcena/prehled/" class="film-title-name">Rozčtvrcená</a><span class="film-title-info"> <span class="info">(S01E01)</span></span></h3></td><td class="td-rating text-right"> 83,9% </td></tr>
+    <tr><td class="name name-half"><h3 class="film-title-inline"><a href="/film/339773-pripady-1-oddeleni/417726-fantom-z-jizaku/prehled/" class="film-title-name">Fantom z Jižáku</a><span class="film-title-info"> <span class="info">(S01E02)</span></span></h3></td><td class="td-rating text-right"> 84% </td></tr>
+    </tbody></table>`;
+  const detail = (type: string, name: string, year: string, percent: number) =>
+    `<script type="application/ld+json">${JSON.stringify({ "@type": type, name, dateCreated: year })}</script><div class="film-rating-average">${percent}%</div>`;
+  // ČSFD marks episode pages as TVSeries in JSON-LD; the heading and type label identify the episode.
+  const episodeDetail = `<script type="application/ld+json">${JSON.stringify({ "@type": "TVSeries", name: "Případy 1. oddělení - Fantom z Jižáku", dateCreated: "2014" })}</script>
+    <div class="film-header-name"><h1> Fantom z Jižáku (S01E02) </h1> <span class="type">(epizoda)</span></div><div class="film-rating-average">84%</div>`;
+
+  it("uses the episode's own ČSFD id, not its series id", () => {
+    expect(parseCsfdDetail(episodeDetail, episodeUrl)).toMatchObject({ sourceId: "417726", kind: "episode", season: 1, episode: 2, rating: { value: 84 } });
+    expect(parseCsfdDetail(detail("TVSeries", "Případy 1. oddělení", "2014", 87), seriesUrl)?.sourceId).toBe("339773");
+  });
+
+  it("lists ČSFD episodes by season and episode code", () => {
+    expect(parseCsfdEpisodes(episodesHtml)).toEqual([
+      { season: 1, episode: 1, url: "https://www.csfd.cz/film/339773-pripady-1-oddeleni/417725-rozctvrcena/prehled/" },
+      { season: 1, episode: 2, url: episodeUrl },
+    ]);
+  });
+
+  it("finds an episode through its series on ČSFD and IMDb", async () => {
+    const path = join(tmpdir(), `milujufilmy-episode-${crypto.randomUUID()}.sqlite`);
+    const db = openDatabase(path);
+    db.prepare("INSERT INTO imdb_titles(id,title,normalized_title,original_title,year,kind) VALUES (?,?,?,?,?,'series')").run("tt3833970", "Případy 1. oddělení", "pripady 1 oddeleni", null, 2014);
+    for (const [id, name, episode] of [["tt100", "Rozčtvrcená", 1], ["tt200", "Fantom z Jižáku", 2]] as const) {
+      db.prepare("INSERT INTO imdb_titles(id,title,normalized_title,original_title,year,kind,season,episode,parent_id) VALUES (?,?,?,?,?,'episode',1,?,'tt3833970')").run(id, name, name.toLowerCase(), null, 2014, episode);
+    }
+    db.prepare("INSERT INTO imdb_ratings(id,value,votes,fetched_at) VALUES ('tt200',7.9,300,'2026-09-20T00:00:00.000Z')").run();
+    db.close();
+    vi.stubGlobal("fetch", async () => { throw new Error("No external fallback in this fixture"); });
+    const searches: string[] = [];
+    const lookup = new LocalLookup(path, { onlineSearch: true, pages: {
+      searchCsfd: async (query) => { searches.push(query); return [{ title: "Případy 1. oddělení", year: 2014, kind: "series", url: seriesUrl }]; },
+      read: async (url) => url.endsWith("/epizody/") ? episodesHtml
+        : url.includes("417726") ? episodeDetail
+        : detail("TVSeries", "Případy 1. oddělení", "2014", 87),
+      searchDuckDuckGo: async () => [], status: () => ({}), close: async () => {},
+    } });
+    try {
+      const found = await lookup.lookup({
+        requestId: "episode", provider: "ivysilani", providerContentId: "213512120200002", parentContentId: "10354229723-pripady-1-oddeleni",
+        title: "Případy 1. oddělení", year: 2014, kind: "episode", season: 1, episode: 2, episodeTitle: "Fantom z Jižáku", locale: "cs-CZ",
+      });
+      expect(found.find((candidate) => candidate.source === "csfd")).toMatchObject({ sourceId: "417726", kind: "episode", season: 1, episode: 2, rating: { value: 84 } });
+      expect(found.find((candidate) => candidate.source === "imdb")).toMatchObject({ sourceId: "tt200", kind: "episode", season: 1, episode: 2, rating: { value: 7.9 } });
+      expect(searches).toEqual(["Případy 1. oddělení"]);
+    } finally { await lookup.close(); }
+  });
+
+  it("returns no episode candidates instead of title namesakes when the series is unknown", async () => {
+    const path = join(tmpdir(), `milujufilmy-episode-miss-${crypto.randomUUID()}.sqlite`);
+    const db = openDatabase(path);
+    db.prepare("INSERT INTO imdb_titles(id,title,normalized_title,original_title,year,kind,season,episode) VALUES ('tt9','Neznámý seriál','neznamy serial',NULL,2014,'episode',1,2)").run();
+    db.close();
+    const lookup = new LocalLookup(path);
+    expect(await lookup.lookup({ requestId: "miss", provider: "ivysilani", title: "Neznámý seriál", kind: "episode", season: 1, episode: 2, locale: "cs-CZ" })).toEqual([]);
+    await lookup.close();
   });
 });
