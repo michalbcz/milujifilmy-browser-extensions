@@ -39,7 +39,7 @@ function TitleCard({ title, state, primary, onRefresh }: { title: DetectedTitle;
     {(["imdb", "csfd"] as const).map((source) => {
       const match = bestCandidate(title.originalTitle ?? title.title, title.year, candidates.filter((candidate) => candidate.source === source));
       const label = source === "imdb" ? "IMDb" : "ČSFD";
-      if (!match) return <p className="missing" key={source}>{label}: {state.loading && !result ? "načítám…" : state.error || result?.warnings?.length ? "nedostupné" : "nenalezeno"}</p>;
+      if (!match) return <p className="missing" key={source}>{label}: {state.loading && !result ? "načítám…" : state.error || result?.warnings?.some((warning) => warning.startsWith(source.toUpperCase())) ? "nedostupné" : "nenalezeno"}</p>;
       const rating = match.candidate.rating;
       return <div className="rating" key={source}>
         <a href={match.candidate.sourceUrl} target="_blank" rel="noreferrer">{label}</a>

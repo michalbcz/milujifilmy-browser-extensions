@@ -80,7 +80,7 @@ export default defineBackground(() => {
       const primary = titles.filter((title) => title.pageRole === "primary");
       const related = titles.filter((title) => title.pageRole !== "primary");
       for (const batch of [primary, related].filter((items) => items.length)) {
-        const fresh = await lookupBatch(batch);
+        const fresh = await lookupBatch(batch, () => requests.isCurrent(tabId, revision));
         if (!requests.isCurrent(tabId, revision)) return { stale: true };
         state.results.push(...fresh);
         state.loading = state.results.length < titles.length;

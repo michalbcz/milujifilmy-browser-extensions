@@ -5,7 +5,7 @@ export default {
     description: "IMDb a ČSFD hodnocení u podporovaných videoték (osobní použití).",
     permissions: ["storage", "sidePanel", "tabs"],
     host_permissions: [
-      "http://127.0.0.1:47321/*",
+      "https://*.imdb.com/*", "https://www.csfd.cz/*",
       "*://*.netflix.com/*", "*://*.max.com/*", "*://*.disneyplus.com/*", "*://*.primevideo.com/*",
       "*://*.oneplay.cz/*", "*://*.iprima.cz/*", "*://*.primaplus.cz/*", "*://*.ceskatelevize.cz/*", "*://*.stream.cz/*",
     ],

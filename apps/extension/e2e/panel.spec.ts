@@ -3,17 +3,22 @@ import { resolve } from "node:path";
 
 test("automatic panel, hide/show, SPA navigation, stale responses, fullscreen and unavailable API", async () => {
   const extension = resolve(".output/chrome-mv3");
-  const context = await chromium.launchPersistentContext("", { channel: "chromium", headless: true, args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`] });
+  const context = await chromium.launchPersistentContext("", { channel: "chromium", ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}), headless: true, args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`] });
   try {
-    const worker = context.serviceWorkers()[0] ?? await context.waitForEvent("serviceworker");
-    await worker.evaluate(() => (globalThis as any).chrome.storage.local.set({ settings: { token: "fixture-token" } }));
+    const worker = context.serviceWorkers()[0] ?? await context.waitForEvent("serviceworker", { timeout: 8000 });
+    expect(worker.url()).toContain("background.js");
     let fail = false;
-    await context.route("http://127.0.0.1:47321/**", async (route) => {
-      if (fail) return route.abort();
-      const { items } = route.request().postDataJSON();
-      // Delay the old title to exercise navigation while a real lookup is pending.
-      if (items[0].title === "Starý titul") await new Promise((resolve) => setTimeout(resolve, 900));
-      await route.fulfill({ json: { results: items.map((title: any) => ({ requestId: title.requestId, candidates: [{ source: "csfd", sourceId: "1224558", sourceUrl: "https://www.csfd.cz/film/1224558/prehled/", canonicalTitle: title.title, kind: title.kind, year: 2022, rating: { value: 78, scale: 100, votes: 45, fetchedAt: "2026-09-20T00:00:00Z" }, evidence: ["fixture"] }] })) } });
+    await context.route("https://www.imdb.com/**", async (route) => {
+      if (fail) return route.fulfill({body: "Access denied"});
+      const url = new URL(route.request().url());
+      if (url.pathname.startsWith("/find")) return route.fulfill({contentType:"text/html",body:`<li><a href="/title/tt1234567/">${url.searchParams.get("q")}</a> (2022)</li>`});
+      return route.fulfill({contentType:"text/html",body:'<script type="application/ld+json">{"@type":"TVSeries","name":"Helsinský syndrom","datePublished":"2022-01-01","aggregateRating":{"ratingValue":7.8}}</script>'});
+    });
+    await context.route("https://www.csfd.cz/**", async (route) => {
+      if (fail) return route.fulfill({body:"Přístup zamítnut"});
+      const url = new URL(route.request().url());
+      if (url.pathname.startsWith("/hledat")) return route.fulfill({contentType:"text/html",body:`<div id="series"><h3><a href="/film/1224558/prehled/">${url.searchParams.get("q")}</a> (2022) (seriál)</h3></div>`});
+      return route.fulfill({contentType:"text/html",body:'<div class="film-rating-average">78 %</div><script type="application/ld+json">{"@type":"TVSeries","name":"Helsinský syndrom","dateCreated":"2022-01-01"}</script>'});
     });
     await context.route("https://www.ceskatelevize.cz/**", (route) => route.fulfill({ contentType: "text/html; charset=utf-8", body: `<!doctype html><html lang="cs"><meta charset="utf-8"><body><main><script id="metadata" type="application/ld+json">{"@type":"TVSeries","name":"Helsinský syndrom"}</script><h1>Helsinský syndrom</h1><a href="/porady/2-strach-nad-mestem/" style="display:block;width:200px;height:100px"><img alt="Strach nad městem"></a><button id="fullscreen" onclick="document.documentElement.requestFullscreen()">Fullscreen</button></main></body></html>` }));
     const page = await context.newPage();
